@@ -6,67 +6,38 @@
 </template>
 <script setup>
 
-const streamed_response = ref('')
-
+const streamed_response = ref([])
 const startStream = async() => {
 	streamed_response.value = ''
-	await fetch('/api/stream').then(processChunkedResponse).then(processStream)
+	await fetch('/api/stream').then(update_stream)
 }
 
-
-// Stream
-
-const processChunkedResponse = (response) => {
-	const reader = response.body.getReader()
-  	const decoder = new TextDecoder()
-	return new ReadableStream({
-		start(controller) {
-		function push() {
-			reader.read().then(({ done, value }) => {
-				// console.log(value)
-			if (done) {
-				controller.close()
-				return;
+const update_stream = async (resp) => {
+	const data = resp.body
+	if (data) {
+		const reader = data.getReader()
+		const decoder = new TextDecoder()
+		let done = false
+		try {
+			while (!done) {
+			const { value, done:doneReading } = await reader.read()
+			done = doneReading
+			decoder.decode(value)
+					.split("\n")
+					.filter(line => line.startsWith("data:") && !line.endsWith('data: [DONE]'))
+					.forEach(line => {
+						try {
+							const json = JSON.parse(line.substring(5))
+							streamed_response.value = streamed_response.value + (json?.choices?.[0]?.delta?.content ?? '')
+						} catch {
+							`Can not parse to json: ${line.substring(5)}`
+						}
+					})
 			}
-			const data = decoder.decode(value, { stream: !done })
-			controller.enqueue(data)
-			let objects = []
-			try{
-				objects = data.split("\n").filter((line) => line.startsWith("data:") && !line.endsWith('data: [DONE]')).map((line) => JSON.parse(line.substring(5)))
-			} catch(e){
-				// console.log(e)
-				// console.log(data)
-			}
-
-			for (const obj of objects){
-				streamed_response.value += obj?.choices?.[0]?.delta?.content ?? ''
-			}push()
-			})
+		} finally {
+			console.log("Cleared Stream")
+			reader.cancel("Streaming ended and we don't need it anymore")
 		}
-		push()
-		},
-	})
-}
-
-const processStream = (stream) => {
-    let reader = stream.getReader();
-
-    return readChunk()
-
-    function readChunk() {
-        return reader.read().then(appendChunks)
-    }
-
-    function appendChunks(result) {
-        // process chunk as Uint8Array and update the UI
-
-        if (result.done) {
-            // console.log('returning')
-            return result
-        } else {
-            // console.log('recursing')
-            return readChunk()
-        }
-    }
+	}
 }
 </script>
